@@ -35,8 +35,10 @@ const APP = {
     cancelled: false,
     pdfFile: null,
     pdfBytes: null,
+    pdfDoc: null,
     pageCount: 0,
-    pages: [], // {i, stage, txt, aacBytes(Uint8Array), err, aborts:[]}
+    pages: [], // {i, stage, txt, aacBytes(Uint8Array), err, aborts:[], _running, _queued, _restartPending}
+    scheduler: null,
     // persisted
     apiKey: "",
     prompt: "",
@@ -158,19 +160,58 @@ function setTempSupport(modelId, supported) {
 // --------- External libs (CDN dynamic import) ---------
 let pdfjsLib = null;
 let JSZip = null;
+let forcePdfNoWorker = false;
+const scriptLoadCache = Object.create(null);
+
+function loadScriptOnce(url) {
+  if (scriptLoadCache[url]) return scriptLoadCache[url];
+  scriptLoadCache[url] = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = url;
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error(`Failed to load script: ${url}`));
+    document.head.appendChild(s);
+  });
+  return scriptLoadCache[url];
+}
 
 async function ensureLibs() {
+  if (!pdfjsLib && window.pdfjsLib) pdfjsLib = window.pdfjsLib;
+  if (!JSZip && window.JSZip) JSZip = window.JSZip;
+
+  // Fallback: lazy-load UMD bundles if initial tags failed.
   if (!pdfjsLib) {
-    // pdfjs-dist ESM build
-    const mod = await import("https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.mjs");
-    pdfjsLib = mod;
-    // Worker
-    pdfjsLib.GlobalWorkerOptions.workerSrc =
-      "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.mjs";
+    await loadScriptOnce("https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js");
+    if (window.pdfjsLib) pdfjsLib = window.pdfjsLib;
   }
   if (!JSZip) {
-    const mod = await import("https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm");
-    JSZip = mod.default;
+    await loadScriptOnce("https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js");
+    if (window.JSZip) JSZip = window.JSZip;
+  }
+
+  if (!pdfjsLib) throw new Error("pdfjsLib not loaded.");
+  if (!JSZip) throw new Error("JSZip not loaded.");
+
+  if (pdfjsLib.GlobalWorkerOptions && !forcePdfNoWorker) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+  }
+}
+
+async function loadPdfDocument(pdfBytes) {
+  const firstOpts = { data: pdfBytes };
+  if (forcePdfNoWorker) firstOpts.disableWorker = true;
+
+  try {
+    return await pdfjsLib.getDocument(firstOpts).promise;
+  } catch (e) {
+    const msg = String(e && e.message || e);
+    if (!forcePdfNoWorker && /cross-origin redirects of the top-level worker script/i.test(msg)) {
+      forcePdfNoWorker = true;
+      return await pdfjsLib.getDocument({ data: pdfBytes, disableWorker: true }).promise;
+    }
+    throw e;
   }
 }
 
@@ -445,6 +486,12 @@ function makeAbort() {
 
 async function processPage(pdfDoc, i, ui) {
   const p = APP.state.pages[i - 1];
+  if (!p) return;
+
+  p._running = true;
+  p._queued = false;
+  p._restartPending = false;
+  p.aborts = [];
 
   try {
     // Render
@@ -457,6 +504,7 @@ async function processPage(pdfDoc, i, ui) {
     // Render isn't fetch-based; cancellation is checked between stages.
     const png = await renderPageToPngBlob(pdfDoc, i, APP.state.scale);
     if (APP.state.cancelled) throw new Error("Cancelled");
+    if (p._restartPending) throw new Error("Restart requested");
 
     // Vision
     p.stage = "vision";
@@ -472,6 +520,7 @@ async function processPage(pdfDoc, i, ui) {
     ui.updateGlobalButtons();
 
     if (APP.state.cancelled) throw new Error("Cancelled");
+    if (p._restartPending) throw new Error("Restart requested");
 
     // TTS
     p.stage = "tts";
@@ -486,8 +535,12 @@ async function processPage(pdfDoc, i, ui) {
     ui.enableAacDownload(p);
     ui.updateGlobalButtons();
   } catch (e) {
-    if (APP.state.cancelled || String(e && e.message || e).toLowerCase().includes("cancel")) {
+    const msg = String(e && e.message || e).toLowerCase();
+    if (APP.state.cancelled || msg.includes("cancel")) {
       p.stage = "cancelled";
+    } else if (p._restartPending || msg.includes("restart requested")) {
+      p.stage = "queued";
+      p.err = null;
     } else {
       p.stage = "failed";
       p.err = String(e && e.message || e);
@@ -495,8 +548,177 @@ async function processPage(pdfDoc, i, ui) {
     ui.updatePage(p);
     ui.updateGlobalButtons();
   } finally {
+    const shouldRequeue = p._restartPending && !APP.state.cancelled;
+    p._running = false;
+    p.aborts = [];
+    p._restartPending = false;
+    if (shouldRequeue && APP.state.scheduler) {
+      APP.state.scheduler.enqueue(i, true);
+    }
+    ui.updatePage(p);
     // Small breather to keep UI responsive on mobile
     await sleep(50);
+  }
+}
+
+function createPageScheduler({ pdfDoc, ui, maxParallel }) {
+  const queue = [];
+  let active = 0;
+  let resolved = false;
+  let resolveDone;
+  const done = new Promise((resolve) => { resolveDone = resolve; });
+
+  const resolveIfDone = () => {
+    if (resolved) return;
+    if (active === 0 && queue.length === 0) {
+      resolved = true;
+      resolveDone();
+    }
+  };
+
+  const pump = () => {
+    if (APP.state.cancelled) {
+      queue.length = 0;
+      resolveIfDone();
+      return;
+    }
+
+    while (active < maxParallel && queue.length > 0 && !APP.state.cancelled) {
+      const pageNum = queue.shift();
+      const p = APP.state.pages[pageNum - 1];
+      if (!p) continue;
+      p._queued = false;
+      active += 1;
+      processPage(pdfDoc, pageNum, ui)
+        .catch(() => {})
+        .finally(() => {
+          active -= 1;
+          pump();
+          resolveIfDone();
+        });
+    }
+
+    resolveIfDone();
+  };
+
+  const enqueue = (pageNum, front = false) => {
+    if (APP.state.cancelled) return false;
+    const p = APP.state.pages[pageNum - 1];
+    if (!p || p._running || p._queued) return false;
+    p._queued = true;
+    if (front) queue.unshift(pageNum);
+    else queue.push(pageNum);
+    ui.updatePage(p);
+    pump();
+    return true;
+  };
+
+  const prioritize = (pageNum) => {
+    if (APP.state.cancelled) return false;
+    const idx = queue.indexOf(pageNum);
+    if (idx === -1) return enqueue(pageNum, true);
+    if (idx > 0) {
+      queue.splice(idx, 1);
+      queue.unshift(pageNum);
+    }
+    return true;
+  };
+
+  const cancel = () => {
+    queue.length = 0;
+    resolveIfDone();
+  };
+
+  return { enqueue, prioritize, cancel, done };
+}
+
+function resetPageForRestart(p, ui) {
+  p.txt = null;
+  p.aacBytes = null;
+  p.err = null;
+  p.stage = "queued";
+  ui.enableTxtDownload(p);
+  ui.enableAacDownload(p);
+  ui.updatePage(p);
+  ui.updateGlobalButtons();
+}
+
+async function restartPage(ui, pageNum) {
+  const p = APP.state.pages[pageNum - 1];
+  if (!p) return;
+  if (!APP.state.apiKey) {
+    ui.setStatus("Please enter an OpenAI API key.");
+    return;
+  }
+  if (!APP.state.pdfFile && !APP.state.pdfBytes) {
+    ui.setStatus("Please upload a PDF.");
+    return;
+  }
+
+  resetPageForRestart(p, ui);
+
+  if (APP.state.running && APP.state.scheduler) {
+    if (p._running) {
+      if (p._restartPending) {
+        ui.setStatus(`Restart already requested for page ${pageNum}.`);
+        return;
+      }
+      p._restartPending = true;
+      for (const ac of p.aborts) {
+        try { ac.abort(); } catch {}
+      }
+      ui.updatePage(p);
+      ui.setStatus(`Restarting page ${pageNum}…`);
+      return;
+    }
+
+    if (p._queued) {
+      APP.state.scheduler.prioritize(pageNum);
+      ui.setStatus(`Restart queued for page ${pageNum}.`);
+      return;
+    }
+
+    if (APP.state.scheduler.enqueue(pageNum, true)) {
+      ui.setStatus(`Restart queued for page ${pageNum}.`);
+    } else {
+      ui.setStatus(`Page ${pageNum} cannot be restarted right now.`);
+    }
+    return;
+  }
+
+  APP.state.cancelled = false;
+  APP.state.running = true;
+  ui.setRunning(true);
+  ui.setStatus(`Restarting page ${pageNum}…`);
+
+  try {
+    await ensureLibs();
+
+    let pdfDoc = APP.state.pdfDoc;
+    if (!pdfDoc) {
+      if (!APP.state.pdfBytes && APP.state.pdfFile) {
+        APP.state.pdfBytes = await APP.state.pdfFile.arrayBuffer();
+      }
+      if (!APP.state.pdfBytes) throw new Error("Please upload a PDF.");
+      pdfDoc = await loadPdfDocument(APP.state.pdfBytes);
+      APP.state.pdfDoc = pdfDoc;
+      APP.state.pageCount = pdfDoc.numPages;
+    }
+
+    const scheduler = createPageScheduler({ pdfDoc, ui, maxParallel: 1 });
+    APP.state.scheduler = scheduler;
+    if (!scheduler.enqueue(pageNum, true)) {
+      throw new Error(`Page ${pageNum} cannot be restarted right now.`);
+    }
+    await scheduler.done;
+    ui.setStatus(`Page ${pageNum} restart complete.`);
+  } catch (e) {
+    ui.setStatus(`Error: ${String(e && e.message || e)}`);
+  } finally {
+    APP.state.scheduler = null;
+    APP.state.running = false;
+    ui.setRunning(false);
+    ui.updateGlobalButtons();
   }
 }
 
@@ -504,6 +726,7 @@ async function runPipeline(ui) {
   await ensureLibs();
   APP.state.cancelled = false;
   APP.state.running = true;
+  APP.state.scheduler = null;
   ui.setRunning(true);
 
   try {
@@ -515,15 +738,25 @@ async function runPipeline(ui) {
     APP.state.pdfBytes = await APP.state.pdfFile.arrayBuffer();
 
     ui.setStatus("Loading PDF…");
-    const loadingTask = pdfjsLib.getDocument({ data: APP.state.pdfBytes });
-    const pdfDoc = await loadingTask.promise;
+    const pdfDoc = await loadPdfDocument(APP.state.pdfBytes);
+    APP.state.pdfDoc = pdfDoc;
     APP.state.pageCount = pdfDoc.numPages;
 
     // Create slots
     APP.state.pages = [];
     ui.clearPages();
     for (let i = 1; i <= APP.state.pageCount; i++) {
-      const p = { i, stage: "queued", txt: null, aacBytes: null, err: null, aborts: [] };
+      const p = {
+        i,
+        stage: "queued",
+        txt: null,
+        aacBytes: null,
+        err: null,
+        aborts: [],
+        _running: false,
+        _queued: false,
+        _restartPending: false
+      };
       APP.state.pages.push(p);
       ui.addPageRow(p);
     }
@@ -533,25 +766,18 @@ async function runPipeline(ui) {
     const workerCount = Math.min(requestedParallel, APP.state.pageCount);
     ui.setStatus(`Processing ${APP.state.pageCount} pages (max parallel: ${workerCount})…`);
 
-    let nextPage = 1;
-    const worker = async () => {
-      while (true) {
-        if (APP.state.cancelled) return;
-        const pageNum = nextPage;
-        nextPage += 1;
-        if (pageNum > APP.state.pageCount) return;
-        await processPage(pdfDoc, pageNum, ui);
-      }
-    };
-
-    const workers = [];
-    for (let w = 0; w < workerCount; w++) workers.push(worker());
-    await Promise.all(workers);
+    const scheduler = createPageScheduler({ pdfDoc, ui, maxParallel: workerCount });
+    APP.state.scheduler = scheduler;
+    for (let i = 1; i <= APP.state.pageCount; i++) {
+      scheduler.enqueue(i);
+    }
+    await scheduler.done;
 
     ui.setStatus(APP.state.cancelled ? "Cancelled." : "Done.");
   } catch (e) {
     ui.setStatus(`Error: ${String(e && e.message || e)}`);
   } finally {
+    APP.state.scheduler = null;
     APP.state.running = false;
     ui.setRunning(false);
     ui.updateGlobalButtons();
@@ -560,9 +786,16 @@ async function runPipeline(ui) {
 
 function cancelPipeline(ui) {
   APP.state.cancelled = true;
+  APP.state.scheduler?.cancel();
   for (const p of APP.state.pages) {
+    p._restartPending = false;
     for (const ac of p.aborts) {
       try { ac.abort(); } catch {}
+    }
+    if (!p._running && (p._queued || p.stage === "queued")) {
+      p._queued = false;
+      p.stage = "cancelled";
+      ui.updatePage(p);
     }
   }
   ui.setStatus("Cancelling…");
@@ -694,7 +927,7 @@ function buildUI() {
 
   const pageTable = el("table", { style: { width: "100%", borderCollapse: "collapse", marginTop: "12px" } });
   const thead = el("thead", {}, el("tr", {},
-    th("Page"), th("Stage"), th("Text"), th("Audio"), th("Error")
+    th("Page"), th("Stage"), th("Text"), th("Audio"), th("Restart"), th("Error")
   ));
   const tbody = el("tbody");
   pageTable.appendChild(thead);
@@ -727,6 +960,7 @@ function buildUI() {
     addPageRow: (p) => {
       const txtBtn = el("button", { style: miniBtnStyle(), disabled: true }, "Download TXT");
       const aacBtn = el("button", { style: miniBtnStyle(), disabled: true }, "Download AAC");
+      const restartBtn = el("button", { style: miniBtnStyle(), disabled: true }, "Restart Page");
 
       txtBtn.addEventListener("click", () => {
         if (typeof p.txt === "string") {
@@ -738,6 +972,9 @@ function buildUI() {
           downloadBlob(new Blob([p.aacBytes], { type: "audio/aac" }), `page_${String(p.i).padStart(3,"0")}.aac`);
         }
       });
+      restartBtn.addEventListener("click", async () => {
+        await restartPage(ui, p.i);
+      });
 
       const stageSpan = el("span", {}, p.stage);
       const errSpan = el("div", { style: { color: "#b00020", whiteSpace: "pre-wrap" } }, "");
@@ -747,10 +984,11 @@ function buildUI() {
         tdNode(stageSpan),
         tdNode(txtBtn),
         tdNode(aacBtn),
+        tdNode(restartBtn),
         tdNode(errSpan)
       );
 
-      p._ui = { row, stageSpan, txtBtn, aacBtn, errSpan };
+      p._ui = { row, stageSpan, txtBtn, aacBtn, restartBtn, errSpan };
       tbody.appendChild(row);
     },
     updatePage: (p) => {
@@ -766,6 +1004,7 @@ function buildUI() {
       } else {
         p._ui.row.style.background = "";
       }
+      p._ui.restartBtn.disabled = !!p._restartPending;
     },
     enableTxtDownload: (p) => { if (p._ui) p._ui.txtBtn.disabled = !(typeof p.txt === "string"); },
     enableAacDownload: (p) => { if (p._ui) p._ui.aacBtn.disabled = !(p.aacBytes instanceof Uint8Array); },
