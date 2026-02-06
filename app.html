@@ -444,6 +444,18 @@ async function zipAllAac() {
   downloadBlob(blob, "aac_pages.zip");
 }
 
+function concatAllTxt() {
+  const pages = APP.state.pages
+    .filter(p => typeof p.txt === "string")
+    .sort((a, b) => a.i - b.i)
+    .map(p => p.txt);
+
+  if (!pages.length) throw new Error("No text pages available.");
+
+  const joined = pages.join("\n\n");
+  downloadBlob(new Blob([joined], { type: "text/plain;charset=utf-8" }), "full.txt");
+}
+
 function concatAllAac() {
   const chunks = APP.state.pages
     .filter(p => p.aacBytes instanceof Uint8Array)
@@ -926,6 +938,10 @@ function buildUI() {
     await zipAllAac();
   }}, "Download all AAC (ZIP)");
 
+  const fullTxtBtn = el("button", { style: btnStyle(), disabled: true, onclick: () => {
+    concatAllTxt();
+  }}, "Download full concatenated TXT");
+
   const fullAacBtn = el("button", { style: btnStyle(), disabled: true, onclick: () => {
     concatAllAac();
   }}, "Download full concatenated AAC");
@@ -1022,6 +1038,7 @@ function buildUI() {
       const anyAac = APP.state.pages.some(p => p.aacBytes instanceof Uint8Array);
 
       zipTxtBtn.disabled = !(allTxtReady && anyTxt && !APP.state.running);
+      fullTxtBtn.disabled = !(allTxtReady && anyTxt && !APP.state.running);
       zipAacBtn.disabled = !(allAacReady && anyAac && !APP.state.running);
       fullAacBtn.disabled = !(allAacReady && anyAac && !APP.state.running);
     }
@@ -1045,7 +1062,7 @@ function buildUI() {
     ),
     el("div", {}, el("div", { style: labelStyle() }, "Optional TTS instructions"), ttsInstr),
     el("div", { style: { display: "flex", gap: "10px", flexWrap: "wrap" } },
-      startBtn, cancelBtn, zipTxtBtn, zipAacBtn, fullAacBtn
+      startBtn, cancelBtn, zipTxtBtn, fullTxtBtn, zipAacBtn, fullAacBtn
     ),
     pageTable
   );
