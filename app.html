@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PDF → PNG → Text → AAC</title>
+<title>Speak Low If You Speak</title>
 </head>
 <body>
 
@@ -837,7 +837,7 @@ function buildUI() {
     lineHeight: "1.35"
   }});
 
-  const title = el("h2", {}, "PDF → PNG → Text → AAC (OpenAI)");
+  const title = el("h2", {}, "Speak Low If You Speak");
 
   const status = el("div", { style: { margin: "8px 0", padding: "8px 10px", background: "#f5f5f5", borderRadius: "8px" }}, "Idle.");
 
@@ -847,6 +847,21 @@ function buildUI() {
     style: { width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #ccc" },
     oninput: (e) => { APP.state.apiKey = e.target.value; persist(); }
   });
+
+  const keyLinks = el("div", {
+    style: { marginTop: "8px", fontSize: "12px", display: "flex", gap: "12px", flexWrap: "wrap" }
+  },
+    el("a", {
+      href: "https://platform.openai.com/settings/organization/api-keys",
+      target: "_blank",
+      rel: "noopener noreferrer"
+    }, "Creating keys"),
+    el("a", {
+      href: "https://platform.openai.com/settings/organization/billing/overview",
+      target: "_blank",
+      rel: "noopener noreferrer"
+    }, "Add to balance")
+  );
 
   const promptArea = el("textarea", {
     rows: "8",
@@ -1055,7 +1070,7 @@ function buildUI() {
   const grid = el("div", { style: { display: "grid", gridTemplateColumns: "1fr", gap: "12px" } },
     title,
     status,
-    el("div", {}, el("div", { style: labelStyle() }, "1) OpenAI API key"), keyInput),
+    el("div", {}, el("div", { style: labelStyle() }, "1) OpenAI API key"), keyInput, keyLinks),
     el("div", {}, el("div", { style: labelStyle() }, "2) Upload PDF"), pdfInput),
     el("div", {}, el("div", { style: labelStyle() }, "3) Prompt (PNG → text)"), promptArea, el("div", { style: { marginTop: "8px" } }, resetPromptBtn)),
     el("div", { style: { display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))", gap:"10px" } },
