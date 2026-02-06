@@ -1159,11 +1159,24 @@ function buildUI() {
   const grid = el("div", { style: { display: "grid", gridTemplateColumns: "1fr", gap: "12px" } },
     title,
     status,
-    el("div", {}, el("div", { style: labelStyle() }, "1) OpenAI API key"), keyInput, keyLinks),
-    el("div", {}, el("div", { style: labelStyle() }, "2) Upload PDF"), pdfInput),
     el("div", {},
-      el("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", flexWrap: "wrap" } },
-        el("div", { style: labelStyle() }, "3) Execution settings"),
+      el("div", { style: { ...labelStyle(), display: "flex", gap: "10px", alignItems: "center", marginBottom: "6px" } },
+        el("div", { style: { minWidth: "24px", margin: 0 } }, "1)"),
+        el("div", {}, "OpenAI API key")
+      ),
+      keyInput,
+      keyLinks
+    ),
+    el("div", {},
+      el("div", { style: { ...labelStyle(), display: "flex", gap: "10px", alignItems: "center", marginBottom: "6px" } },
+        el("div", { style: { minWidth: "24px", margin: 0 } }, "2)"),
+        el("div", {}, "Upload PDF")
+      ),
+      pdfInput
+    ),
+    el("div", {},
+      el("div", { style: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" } },
+        el("div", { style: { ...labelStyle(), margin: 0, minWidth: "24px" } }, "3)"),
         settingsToggleBtn
       ),
       settingsPanel
