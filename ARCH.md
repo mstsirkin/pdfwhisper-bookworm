@@ -165,7 +165,7 @@ UX summary:
 
 Vision model:
 
-- `gpt-5.2`
+- `gpt-4o-mini` (current default in `app.html`)
 
 Default PNG → text prompt:
 
@@ -193,8 +193,10 @@ Structure:
 <html>
 <body>
 
-<script type="module">
-  // entire app.js pasted here
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script>
+  // entire app logic pasted here
 </script>
 
 </body>
@@ -203,10 +205,17 @@ Structure:
 
 Usage:
 
-1. Put the full JS inside `<script type="module">`.
-2. Open the file directly in a modern browser (Safari / Chrome / Edge).
+1. Keep the CDN `<script src=...>` library tags (PDF.js + JSZip).
+2. Put the full app JS inside a normal inline `<script>`.
+3. Open the file directly in a modern browser (Safari / Chrome / Edge).
+PDF worker behavior:
 
-If PDF.js workers fail under `file://`, run a tiny local server:
+- App first attempts PDF.js worker mode.
+- If browser throws:
+  `Refused to cross-origin redirects of the top-level worker script`
+  app retries automatically with `disableWorker: true`.
+
+If you still want stricter local-origin behavior under `file://`, run a tiny local server:
 
 ```bash
 python3 -m http.server
@@ -224,16 +233,16 @@ Everything runs locally except OpenAI API calls.
 
 
 
-## 17. Full combined text download
+## 17. Full concatenated text download
 
 In addition to per-page TXT downloads, the UI must provide:
 
-- **Download full text (single TXT)**
+- **Download full concatenated TXT**
 
 Behavior:
 
 - As soon as **all text pages** are ready:
-  - Enable a button: “Download full combined TXT”
+  - Enable a button: “Download full concatenated TXT”
 - The combined file is created by concatenating all `page_###.txt` contents in page order,
   separated by two newlines between pages.
 - Output filename example:
@@ -246,7 +255,7 @@ This is independent of audio readiness and appears together with:
 Summary:
 
 - Per-page TXT → immediate
-- Full combined TXT → when all text pages complete
+- Full concatenated TXT → when all text pages complete
 
 
 ## 18. Parallel page processing
@@ -259,23 +268,26 @@ Add a numeric input:
 
 - **Max parallel pages** (concurrency limit)
 - Default: **30**
-- Minimum: 1
+- Minimum: 0
 - Maximum: user-defined (practically constrained by device memory and API limits)
+- UI label: **Max parallel pages (0 to start jobs manually)**
 
 This value controls how many pages may be simultaneously in-flight (render → vision → TTS).
 
 ### Behavior
 
 - Pages are queued in order.
-- At most **N** pages (user-selected, default 30) may run concurrently.
-- As soon as one page finishes or fails, the next queued page starts.
+- If `N > 0`: at most **N** pages run concurrently.
+- If `N = 0`: pages are queued but no jobs auto-start.
+- When `N > 0`, as soon as one page finishes or fails, the next queued page starts.
 - Per-page UI updates independently.
+- In manual mode (`N = 0`), user starts jobs page-by-page via **Restart Page**.
 
 ### UX
 
 - Field appears near Start button:
 
-  “Max parallel pages: [ 30 ]”
+  “Max parallel pages (0 to start jobs manually): [ 30 ]”
 
 - Changing this value affects the next Start (not mid-run).
 
@@ -289,90 +301,17 @@ This value controls how many pages may be simultaneously in-flight (render → v
 
 - Default 30 provides strong throughput on modern desktops.
 - User may reduce to 1 for low-memory devices or increase for fast desktops.
+- `0` enables manual per-page start workflows.
 
 
 ## 19. Adaptive concurrency (automatic rate‑limit backoff)
 
-Parallelism is **adaptive**, not fixed.
+Current status in `app.html`:
 
-User selects:
-
-- Max parallel pages (default: 30, user may set higher, e.g. 60)
-
-Internally the app maintains:
-
-- `effectiveParallel` (starts equal to user value)
-
-This is the *actual* concurrency used by the scheduler.
-
-### On OpenAI 429 (rate limit)
-
-When any OpenAI request (vision or TTS) returns **HTTP 429**:
-
-1. Reduce effective concurrency gently:
-
-```
-effectiveParallel = max(1, floor(effectiveParallel * 0.75))
-```
-
-2. Display status:
-
-```
-Rate limited. Reducing parallelism to X.
-```
-
-3. Retry the failed page after a short randomized delay:
-
-- 1–3 seconds (jitter)
-
-### If repeated 429s occur shortly after
-
-Optionally apply stronger braking:
-
-```
-effectiveParallel = max(1, floor(effectiveParallel * 0.5))
-```
-
-This prevents oscillation when limits are tight.
-
-### Retry behavior
-
-- Failed page is re-queued automatically.
-- Retries use the *new* reduced `effectiveParallel`.
-- Queued pages wait until slots are available.
-
-### Slow recovery (optional polish)
-
-After several successful pages with no 429:
-
-```
-effectiveParallel += 1
-```
-
-Up to the user-defined maximum.
-
-This provides gradual ramp-up.
-
-### Rationale
-
-This is classic **AIMD (Additive Increase / Multiplicative Decrease)**:
-
-- 429 → multiply by 0.75 (gentle backoff)
-- sustained success → +1 occasionally
-
-Benefits:
-
-- Automatically adapts to account limits
-- Works across GPT‑5.2 vision + TTS
-- Prevents hard failures at high user-selected concurrency
-- Keeps throughput high when possible
-
-### Summary
-
-- User sets maximum (e.g. 30)
-- System dynamically finds safe operating point
-- No hard-coded OpenAI limits
-- Mobile-friendly and self-correcting
+- Adaptive 429 backoff is **not implemented yet**.
+- Scheduler uses the user-selected fixed value (`maxParallel`).
+- HTTP 429 does not auto-reduce concurrency.
+- `maxParallel = 0` remains reserved for manual-start mode only.
 
 
 
@@ -389,18 +328,12 @@ For a given page:
 1. Discard any existing:
    - extracted text
    - generated AAC
-2. Reset page state to:
+2. Reset page state (clear text/audio/error for that page).
+3. Re-run full pipeline:
 
-```
-vision
-```
-
-3. Re-run:
-
+- Render (PDF → PNG)
 - Vision (PNG → text)
-- then TTS (text → AAC)
-
-The PDF render step is re-run to regenerate a fresh PNG for the page.
+- TTS (text → AAC)
 
 ### UX
 
@@ -408,17 +341,19 @@ Per page buttons:
 
 - Download TXT (when ready)
 - Download AAC (when ready)
-- **Restart Page** (always enabled once rendering is complete)
+- **Restart Page**
 
-Restart button is disabled while that page is actively running.
+Restart button is disabled only while a restart is already pending for that page.
 
 ### Interaction with concurrency
 
-- Restarted pages are re-queued into the same adaptive scheduler.
-- They respect:
-  - current `effectiveParallel`
-  - adaptive 0.75 backoff
-  - retry logic
+- Restarted pages are managed by the same scheduler pool.
+- If page is already running:
+  - restart marks pending
+  - aborts in-flight request(s)
+  - immediately starts a fresh run for that same page.
+- If page is queued or idle while pipeline is running:
+  - restart starts it immediately, even if this temporarily exceeds `maxParallel`.
 
 ### Rationale
 
@@ -442,25 +377,16 @@ Nothing is skipped or reused. Each restart regenerates a fresh PNG and re-runs a
 
 
 
-## 21. Vision model dropdown + automatic temperature detection
+## 21. Vision model input + automatic temperature detection
 
 ### Vision model selection
 
-Instead of a free-text field, the UI provides a **dropdown of available models**:
+UI currently uses a **free-text model field** (persisted locally), e.g.:
 
-- On API key entry (or via a “Load models” button), the app calls:
+- `gpt-4o-mini`
+- codex-family IDs (if available to the API key)
 
-```
-GET /v1/models
-```
-
-using the user’s API key.
-
-- Returned model IDs are filtered (e.g. `gpt-*`) and populated into a `<select>` dropdown.
-- User selection updates `visionModel` and is persisted locally.
-- This guarantees only models actually available to the user can be chosen.
-
-This avoids “model does not exist” errors.
+The app does not currently pre-load model IDs from `/v1/models`.
 
 ### Temperature capability detection
 
@@ -505,7 +431,44 @@ based on this cache.
 
 ### Summary
 
-- Vision model chosen via dropdown populated from `/v1/models`
+- Vision model entered via persisted text field
 - Temperature support detected dynamically per model
 - Decision cached locally
 - Vision calls become self-correcting and future-proof
+
+
+## 22. Future ideas
+
+The following items were previously described as active behavior but are now tracked as future enhancements.
+
+### Vision model dropdown from `/v1/models`
+
+Possible implementation:
+
+- Call `GET /v1/models` using the user API key.
+- Filter returned IDs to relevant vision-capable model families.
+- Populate a `<select>` dropdown instead of free-text input.
+- Persist selected model ID locally.
+
+Expected benefit:
+
+- Fewer invalid-model errors.
+- Better discoverability of models available to each user key.
+
+### Adaptive concurrency backoff on 429
+
+Possible implementation:
+
+- Keep user `maxParallel` as an upper bound.
+- Track runtime `effectiveParallel`.
+- On HTTP 429:
+  - reduce `effectiveParallel` (e.g., multiplicative decrease),
+  - re-queue failed page with jittered retry delay.
+- After sustained success:
+  - slowly increase `effectiveParallel` (additive increase).
+- Clamp automatic backoff floor to `1` so manual mode (`maxParallel = 0`) remains user-controlled.
+
+Expected benefit:
+
+- Better throughput under changing rate limits.
+- Fewer hard failures at high concurrency settings.
