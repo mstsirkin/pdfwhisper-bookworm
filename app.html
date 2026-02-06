@@ -49,6 +49,7 @@ const APP = {
     ttsInstructions: "", // optional
     scale: 1.5,
     maxParallel: 30,
+    settingsExpanded: false,
   },
   defaults: {
     prompt:
@@ -130,6 +131,7 @@ function loadPersisted() {
     if (typeof obj.maxParallel === "number" && Number.isFinite(obj.maxParallel)) {
       APP.state.maxParallel = Math.max(0, Math.floor(obj.maxParallel));
     }
+    if (typeof obj.settingsExpanded === "boolean") APP.state.settingsExpanded = obj.settingsExpanded;
   } catch {}
 }
 function persist() {
@@ -142,6 +144,7 @@ function persist() {
     ttsInstructions: APP.state.ttsInstructions,
     scale: APP.state.scale,
     maxParallel: APP.state.maxParallel,
+    settingsExpanded: APP.state.settingsExpanded,
   };
   try { localStorage.setItem(LS_KEY, JSON.stringify(obj)); } catch {}
 }
@@ -961,6 +964,73 @@ function buildUI() {
     }
   }, "Reset all settings");
 
+  const settingsToggleBtn = el("button", {
+    style: btnStyle({ background: "#eee" }),
+    type: "button",
+    onclick: () => {
+      APP.state.settingsExpanded = !APP.state.settingsExpanded;
+      updateSettingsPanel();
+      persist();
+    }
+  }, APP.state.settingsExpanded ? "Hide settings" : "Show settings");
+
+  const promptSection = el("div", {},
+    el("div", { style: labelStyle() }, "Prompt (PNG → text)"),
+    promptArea
+  );
+
+  const modelSettingsGrid = el("div", { style: { display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))", gap:"10px" } },
+    el("div", {}, el("div", { style: labelStyle() }, "Vision model"), visionModelInput),
+    el("div", {}, el("div", { style: labelStyle() }, "Scale (PDF.js)"), scaleInput),
+    el("div", {}, el("div", { style: labelStyle() }, "Max parallel pages (0 to start jobs manually)"), parallelInput),
+  );
+
+  const ttsSettingsGrid = el("div", { style: { display:"grid", gridTemplateColumns:"1fr 1fr", gap:"10px" } },
+    el("div", {}, el("div", { style: labelStyle() }, "TTS model"), ttsModelInput),
+    el("div", {}, el("div", { style: labelStyle() }, "Voice"), voiceInput),
+  );
+
+  const ttsInstructionsSection = el("div", {}, el("div", { style: labelStyle() }, "Optional TTS instructions"), ttsInstr);
+
+  const settingsPanelInner = el("div", { style: { display: "grid", gap: "12px" } },
+    el("div", { style: { display: "flex", gap: "10px", flexWrap: "wrap" } }, resetAllSettingsBtn),
+    promptSection,
+    modelSettingsGrid,
+    ttsSettingsGrid,
+    ttsInstructionsSection
+  );
+
+  const settingsPanel = el("div", {
+    style: {
+      overflow: "hidden",
+      maxHeight: "0px",
+      opacity: "0",
+      marginTop: "0px",
+      pointerEvents: "none",
+      transition: "max-height 240ms ease, opacity 180ms ease, margin-top 240ms ease"
+    }
+  }, settingsPanelInner);
+
+  function updateSettingsPanel({ animate = true } = {}) {
+    const expanded = !!APP.state.settingsExpanded;
+    settingsToggleBtn.textContent = expanded ? "Hide settings" : "Show settings";
+    settingsToggleBtn.setAttribute("aria-expanded", String(expanded));
+    if (!animate) settingsPanel.style.transition = "none";
+    settingsPanel.style.opacity = expanded ? "1" : "0";
+    settingsPanel.style.marginTop = expanded ? "8px" : "0px";
+    settingsPanel.style.pointerEvents = expanded ? "auto" : "none";
+    settingsPanel.style.maxHeight = expanded ? `${settingsPanel.scrollHeight}px` : "0px";
+    if (!animate) {
+      requestAnimationFrame(() => {
+        settingsPanel.style.transition = "max-height 240ms ease, opacity 180ms ease, margin-top 240ms ease";
+      });
+    }
+  }
+
+  window.addEventListener("resize", () => {
+    if (APP.state.settingsExpanded) settingsPanel.style.maxHeight = `${settingsPanel.scrollHeight}px`;
+  });
+
   const startBtn = el("button", { style: btnStyle(), onclick: async () => {
     if (APP.state.running) return;
     await runPipeline(ui);
@@ -1092,23 +1162,12 @@ function buildUI() {
     el("div", {}, el("div", { style: labelStyle() }, "1) OpenAI API key"), keyInput, keyLinks),
     el("div", {}, el("div", { style: labelStyle() }, "2) Upload PDF"), pdfInput),
     el("div", {},
-      el("div", { style: labelStyle() }, "3) Execution settings"),
-      el("div", { style: { marginTop: "8px", display: "flex", gap: "10px", flexWrap: "wrap" } }, resetAllSettingsBtn)
+      el("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", flexWrap: "wrap" } },
+        el("div", { style: labelStyle() }, "3) Execution settings"),
+        settingsToggleBtn
+      ),
+      settingsPanel
     ),
-    el("div", {},
-      el("div", { style: labelStyle() }, "Prompt (PNG → text)"),
-      promptArea
-    ),
-    el("div", { style: { display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))", gap:"10px" } },
-      el("div", {}, el("div", { style: labelStyle() }, "Vision model"), visionModelInput),
-      el("div", {}, el("div", { style: labelStyle() }, "Scale (PDF.js)"), scaleInput),
-      el("div", {}, el("div", { style: labelStyle() }, "Max parallel pages (0 to start jobs manually)"), parallelInput),
-    ),
-    el("div", { style: { display:"grid", gridTemplateColumns:"1fr 1fr", gap:"10px" } },
-      el("div", {}, el("div", { style: labelStyle() }, "TTS model"), ttsModelInput),
-      el("div", {}, el("div", { style: labelStyle() }, "Voice"), voiceInput),
-    ),
-    el("div", {}, el("div", { style: labelStyle() }, "Optional TTS instructions"), ttsInstr),
     el("div", { style: { display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" } },
       el("div", { style: { ...labelStyle(), margin: 0, minWidth: "24px" } }, "4)"),
       startBtn, cancelBtn
@@ -1134,6 +1193,7 @@ function buildUI() {
   scaleInput.value = String(APP.state.scale);
   parallelInput.value = String(APP.state.maxParallel);
 
+  updateSettingsPanel({ animate: false });
   ui.setRunning(false);
   ui.updateGlobalButtons();
   return ui;
