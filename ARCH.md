@@ -112,13 +112,21 @@ AAC bitrate uncontrolled.
 
 ## 13. UX core
 
-- API key field (persisted securely)
-- Prompt editor (persisted)
-- Button: Reset prompt to default
-- PDF upload
-- Start / Cancel
+- App title: **PDF Whisper: Speak Low If You Speak**
+- Numbered control rows:
+  - `1)` OpenAI API key
+  - `2)` Upload PDF
+  - `3)` Execution settings toggle
+  - `4)` Start processing / Cancel
+  - `5)` Download actions
+- API key field (persisted locally) with helper links:
+  - Creating keys
+  - Add to balance
+- Execution settings are collapsible (Show settings / Hide settings), collapsed by default.
+- Prompt editor (persisted) is inside execution settings.
+- Button: **Reset all settings** (keeps API key, resets prompt + execution defaults).
 - Per-page slots + progress
-- Retry per page
+- Restart per page
 
 ## 14. UX additions (per-page immediacy)
 
@@ -141,6 +149,11 @@ Global:
    - “Download all AAC (ZIP)”
    - “Download full concatenated AAC”
 
+- Download row shows a status emoji after `5)`:
+  - Not started: `🧘😴`
+  - Working: `👷‍♂⏳`
+  - Ready: `👍😘`
+
 Concatenated AAC = byte-append ADTS pages.
 
 Cancel:
@@ -156,7 +169,7 @@ Persistence:
 UX summary:
 - Immediate per-page TXT
 - Immediate per-page AAC
-- Reset-to-default prompt button
+- Reset-all-settings button (API key preserved)
 - Final buttons gated by readiness
 - No waiting for full document
 
@@ -180,7 +193,7 @@ return the result in field "file" in json.
 Do not add any additional comments besides the markup above. in particular leave any notes outside of the file field in json.
 
 This prompt is persisted locally and can be edited by the user.
-A “Reset prompt to default” button restores this block exactly.
+A “Reset all settings” action restores this prompt and other execution defaults while keeping the API key.
 
 
 ## 16. Running as a single HTML file (JS inline)
@@ -286,7 +299,7 @@ This value controls how many pages may be simultaneously in-flight (render → v
 
 ### UX
 
-- Field appears near Start button:
+- Field appears in the `3)` execution settings panel (opened via “Show settings”):
 
   “Max parallel pages (0 to start jobs manually): [ 30 ]”
 
