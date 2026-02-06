@@ -553,7 +553,7 @@ async function processPage(pdfDoc, i, ui) {
     p.aborts = [];
     p._restartPending = false;
     if (shouldRequeue && APP.state.scheduler) {
-      APP.state.scheduler.enqueue(i, true);
+      APP.state.scheduler.enqueueImmediate(i);
     }
     ui.updatePage(p);
     // Small breather to keep UI responsive on mobile
@@ -576,6 +576,24 @@ function createPageScheduler({ pdfDoc, ui, maxParallel }) {
     }
   };
 
+  const startPageNow = (pageNum) => {
+    const p = APP.state.pages[pageNum - 1];
+    if (!p || p._running) return false;
+    const idx = queue.indexOf(pageNum);
+    if (idx !== -1) queue.splice(idx, 1);
+    p._queued = false;
+    active += 1;
+    processPage(pdfDoc, pageNum, ui)
+      .catch(() => {})
+      .finally(() => {
+        active -= 1;
+        pump();
+        resolveIfDone();
+      });
+    ui.updatePage(p);
+    return true;
+  };
+
   const pump = () => {
     if (APP.state.cancelled) {
       queue.length = 0;
@@ -585,17 +603,7 @@ function createPageScheduler({ pdfDoc, ui, maxParallel }) {
 
     while (active < maxParallel && queue.length > 0 && !APP.state.cancelled) {
       const pageNum = queue.shift();
-      const p = APP.state.pages[pageNum - 1];
-      if (!p) continue;
-      p._queued = false;
-      active += 1;
-      processPage(pdfDoc, pageNum, ui)
-        .catch(() => {})
-        .finally(() => {
-          active -= 1;
-          pump();
-          resolveIfDone();
-        });
+      startPageNow(pageNum);
     }
 
     resolveIfDone();
@@ -613,15 +621,9 @@ function createPageScheduler({ pdfDoc, ui, maxParallel }) {
     return true;
   };
 
-  const prioritize = (pageNum) => {
+  const enqueueImmediate = (pageNum) => {
     if (APP.state.cancelled) return false;
-    const idx = queue.indexOf(pageNum);
-    if (idx === -1) return enqueue(pageNum, true);
-    if (idx > 0) {
-      queue.splice(idx, 1);
-      queue.unshift(pageNum);
-    }
-    return true;
+    return startPageNow(pageNum);
   };
 
   const cancel = () => {
@@ -629,7 +631,7 @@ function createPageScheduler({ pdfDoc, ui, maxParallel }) {
     resolveIfDone();
   };
 
-  return { enqueue, prioritize, cancel, done };
+  return { enqueue, enqueueImmediate, cancel, done };
 }
 
 function resetPageForRestart(p, ui) {
@@ -673,13 +675,16 @@ async function restartPage(ui, pageNum) {
     }
 
     if (p._queued) {
-      APP.state.scheduler.prioritize(pageNum);
-      ui.setStatus(`Restart queued for page ${pageNum}.`);
+      if (APP.state.scheduler.enqueueImmediate(pageNum)) {
+        ui.setStatus(`Restarting page ${pageNum}…`);
+      } else {
+        ui.setStatus(`Page ${pageNum} cannot be restarted right now.`);
+      }
       return;
     }
 
-    if (APP.state.scheduler.enqueue(pageNum, true)) {
-      ui.setStatus(`Restart queued for page ${pageNum}.`);
+    if (APP.state.scheduler.enqueueImmediate(pageNum)) {
+      ui.setStatus(`Restarting page ${pageNum}…`);
     } else {
       ui.setStatus(`Page ${pageNum} cannot be restarted right now.`);
     }
@@ -707,7 +712,7 @@ async function restartPage(ui, pageNum) {
 
     const scheduler = createPageScheduler({ pdfDoc, ui, maxParallel: 1 });
     APP.state.scheduler = scheduler;
-    if (!scheduler.enqueue(pageNum, true)) {
+    if (!scheduler.enqueueImmediate(pageNum)) {
       throw new Error(`Page ${pageNum} cannot be restarted right now.`);
     }
     await scheduler.done;
