@@ -746,6 +746,93 @@ async function restartPage(ui, pageNum) {
   }
 }
 
+async function restartFailedJobs(ui) {
+  const failed = APP.state.pages.filter((p) => p.stage === "failed");
+  if (failed.length === 0) {
+    ui.setStatus("No failed pages to restart.");
+    ui.updateGlobalButtons();
+    return;
+  }
+  if (!APP.state.apiKey) {
+    ui.setStatus("Please enter an OpenAI API key.");
+    return;
+  }
+  if (!APP.state.pdfFile && !APP.state.pdfBytes) {
+    ui.setStatus("Please upload a PDF.");
+    return;
+  }
+
+  for (const p of failed) {
+    resetPageForRestart(p, ui);
+  }
+
+  if (APP.state.running && APP.state.scheduler) {
+    let restarted = 0;
+    for (const p of failed) {
+      if (p._running) {
+        if (!p._restartPending) {
+          p._restartPending = true;
+          for (const ac of p.aborts) {
+            try { ac.abort(); } catch {}
+          }
+          ui.updatePage(p);
+        }
+        restarted += 1;
+        continue;
+      }
+      if (APP.state.scheduler.enqueueImmediate(p.i)) restarted += 1;
+    }
+    if (restarted > 0) {
+      ui.setStatus(`Restarting ${restarted} failed page${restarted === 1 ? "" : "s"}…`);
+    } else {
+      ui.setStatus("Failed pages cannot be restarted right now.");
+    }
+    ui.updateGlobalButtons();
+    return;
+  }
+
+  APP.state.cancelled = false;
+  APP.state.running = true;
+  ui.setRunning(true);
+  ui.setStatus(`Restarting ${failed.length} failed page${failed.length === 1 ? "" : "s"}…`);
+
+  try {
+    await ensureLibs();
+
+    let pdfDoc = APP.state.pdfDoc;
+    if (!pdfDoc) {
+      if (!APP.state.pdfBytes && APP.state.pdfFile) {
+        APP.state.pdfBytes = await APP.state.pdfFile.arrayBuffer();
+      }
+      if (!APP.state.pdfBytes) throw new Error("Please upload a PDF.");
+      pdfDoc = await loadPdfDocument(APP.state.pdfBytes);
+      APP.state.pdfDoc = pdfDoc;
+      APP.state.pageCount = pdfDoc.numPages;
+    }
+
+    const parsedParallel = Number(APP.state.maxParallel);
+    const requestedParallel = Number.isFinite(parsedParallel)
+      ? Math.max(1, Math.floor(parsedParallel))
+      : 1;
+    const workerCount = Math.min(requestedParallel, failed.length);
+
+    const scheduler = createPageScheduler({ pdfDoc, ui, maxParallel: workerCount });
+    APP.state.scheduler = scheduler;
+    for (const p of failed) {
+      scheduler.enqueue(p.i);
+    }
+    await scheduler.done;
+    ui.setStatus(`Restarted ${failed.length} failed page${failed.length === 1 ? "" : "s"}.`);
+  } catch (e) {
+    ui.setStatus(`Error: ${String(e && e.message || e)}`);
+  } finally {
+    APP.state.scheduler = null;
+    APP.state.running = false;
+    ui.setRunning(false);
+    ui.updateGlobalButtons();
+  }
+}
+
 async function runPipeline(ui) {
   await ensureLibs();
   APP.state.cancelled = false;
@@ -1043,6 +1130,10 @@ function buildUI() {
     cancelPipeline(ui);
   }}, "Cancel");
 
+  const restartFailedBtn = el("button", { style: btnStyle({ background:"#eee" }), disabled: true, onclick: async () => {
+    await restartFailedJobs(ui);
+  }}, "Restart only failed jobs");
+
   const zipTxtBtn = el("button", { style: btnStyle(), disabled: true, onclick: async () => {
     await zipAllTxt();
   }}, "Download all TXT (ZIP)");
@@ -1166,7 +1257,9 @@ function buildUI() {
       const anyInProgress = APP.state.pages.some(p =>
         p._running || p.stage === "rendering" || p.stage === "vision" || p.stage === "text_ready" || p.stage === "tts"
       );
+      const anyFailed = APP.state.pages.some(p => p.stage === "failed");
       const readyForDownload = !APP.state.running && ((allTxtReady && anyTxt) || (allAacReady && anyAac));
+      restartFailedBtn.disabled = !anyFailed;
 
       let emoji = "🧘😴";
       let label = "Not started";
@@ -1211,7 +1304,7 @@ function buildUI() {
     ),
     el("div", { style: { display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" } },
       el("div", { style: Object.assign({}, labelStyle(), { margin: 0, minWidth: "24px" }) }, "4)"),
-      startBtn, cancelBtn
+      startBtn, cancelBtn, restartFailedBtn
     ),
     el("div", { style: { display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" } },
       el("div", { style: Object.assign({}, labelStyle(), { margin: 0, minWidth: "24px" }) }, "5)"),
