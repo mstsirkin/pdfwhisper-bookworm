@@ -34,8 +34,8 @@ Output:
 Use PDF.js.
 
 Rules:
-- One page at a time
-- Scale ~1.5
+- Page jobs can run in parallel (bounded by `maxParallel`)
+- Default scale: `2` (user-editable)
 - Always output PNG
 - Free canvas after each page
 
@@ -117,7 +117,7 @@ AAC bitrate uncontrolled.
   - `1)` OpenAI API key
   - `2)` Upload PDF
   - `3)` Execution settings toggle
-  - `4)` Start processing / Cancel
+  - `4)` Start processing / Cancel / Restart only failed jobs
   - `5)` Download actions
 - API key field (persisted locally) with helper links:
   - Creating keys
@@ -127,6 +127,7 @@ AAC bitrate uncontrolled.
 - Button: **Reset all settings** (keeps API key, resets prompt + execution defaults).
 - Per-page slots + progress
 - Restart per page
+- Restart only failed jobs (global action, enabled when any page is failed)
 
 ## 14. UX additions (per-page immediacy)
 
@@ -137,7 +138,10 @@ Per page:
 - AAC downloadable as soon as TTS finishes
 
 Stages:
-queued → rendering → vision → tts → ready
+queued → rendering → vision/vision(try:X) → text_ready → tts/tts(try:X) → ready
+
+Also possible terminal states:
+failed, cancelled
 
 Global:
 
@@ -152,6 +156,7 @@ Global:
 - Download row shows a status emoji after `5)`:
   - Not started: `🧘😴`
   - Working: `👷‍♂⏳`
+  - Done with failures: `🤷😘`
   - Ready: `👍😘`
 
 Concatenated AAC = byte-append ADTS pages.
@@ -164,7 +169,7 @@ Cancel:
 Persistence:
 - OpenAI key (secure storage)
 - Prompt
-- Voice/model/speed
+- Voice/model/settings (including scale, max parallel, and request stagger seconds)
 
 UX summary:
 - Immediate per-page TXT
@@ -207,8 +212,6 @@ Structure:
 <html>
 <body>
 
-<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script>
   // entire app logic pasted here
 </script>
@@ -219,8 +222,8 @@ Structure:
 
 Usage:
 
-1. Keep the CDN `<script src=...>` library tags (PDF.js + JSZip).
-2. Put the full app JS inside a normal inline `<script>`.
+1. Put the full app JS inside a normal inline `<script>`.
+2. App lazy-loads PDF.js + JSZip from CDN with fallback (jsDelivr → unpkg).
 3. Open the file directly in a modern browser (Safari / Chrome / Edge).
 PDF worker behavior:
 
@@ -285,6 +288,15 @@ Add a numeric input:
 - Minimum: 0
 - Maximum: user-defined (practically constrained by device memory and API limits)
 - UI label: **Max parallel pages (0 to start jobs manually)**
+- Additional pacing input:
+  - **Request stagger (seconds)**
+  - Default: **1**
+  - `0` disables pacing
+  - This setting can be edited mid-run
+- Retry toggle:
+  - **Retry on rate limit (HTTP 495)**
+  - Default: enabled
+  - When disabled, HTTP `495` fails the page immediately (no auto-retry)
 
 This value controls how many pages may be simultaneously in-flight (render → vision → TTS).
 
@@ -296,6 +308,8 @@ This value controls how many pages may be simultaneously in-flight (render → v
 - When `N > 0`, as soon as one page finishes or fails, the next queued page starts.
 - Per-page UI updates independently.
 - In manual mode (`N = 0`), user starts jobs page-by-page via **Restart Page**.
+- OpenAI requests are globally staggered by configured seconds.
+- Stagger is enforced between sends and completions (next request waits after either event).
 
 ### UX
 
@@ -303,7 +317,8 @@ This value controls how many pages may be simultaneously in-flight (render → v
 
   “Max parallel pages (0 to start jobs manually): [ 30 ]”
 
-- Changing this value affects the next Start (not mid-run).
+- Changing **max parallel pages** affects the next Start (not mid-run).
+- Changing **request stagger (seconds)** applies to subsequent requests immediately (including mid-run).
 
 ### Cancellation
 
@@ -318,14 +333,23 @@ This value controls how many pages may be simultaneously in-flight (render → v
 - `0` enables manual per-page start workflows.
 
 
-## 19. Adaptive concurrency (automatic rate‑limit backoff)
+## 19. Rate-limit resilience (current behavior)
 
 Current status in `app.html`:
 
-- Adaptive 429 backoff is **not implemented yet**.
-- Scheduler uses the user-selected fixed value (`maxParallel`).
-- HTTP 429 does not auto-reduce concurrency.
-- `maxParallel = 0` remains reserved for manual-start mode only.
+- Scheduler uses user-selected fixed concurrency (`maxParallel`).
+- Global request staggering is implemented via `requestStaggerSec` (default `1`).
+- Vision/TTS calls retry indefinitely on HTTP `495` until:
+  - success, or
+  - user cancels, or
+  - page restart is requested.
+- Retry-on-`495` behavior is user-configurable via settings toggle:
+  - enabled: keep retrying with `try:X` counter
+  - disabled: fail immediately on first `495`
+- During HTTP `495` retries, page stage shows:
+  - `vision(try:X)` or `tts(try:X)` (incrementing `X`)
+- The latest HTTP `495` error message is shown in page error/status so user can monitor and cancel.
+- Adaptive HTTP `429` backoff is **not implemented yet**.
 
 
 
@@ -388,6 +412,18 @@ without restarting the entire document.
 Render (PDF → PNG) → Vision → TTS
 
 Nothing is skipped or reused. Each restart regenerates a fresh PNG and re-runs all steps.
+
+### Global failed-page restart
+
+There is also a global action:
+
+- **Restart only failed jobs**
+
+Behavior:
+
+- Enabled only when one or more pages are in `failed` state.
+- Resets and restarts only failed pages.
+- Uses the same scheduler and concurrency settings as the main pipeline.
 
 
 
@@ -469,15 +505,6 @@ Expected benefit:
 - Fewer invalid-model errors.
 - Better discoverability of models available to each user key.
 
-### Scale
-should be integer by default. switch to 2
-
-### Handling 429
-- retry later
-- stargger starting connections - e.g. by 1sec
-- 429 error from openai actually tells you how long to wait
-
-
 ### Adaptive concurrency backoff on 429
 
 Possible implementation:
@@ -496,14 +523,11 @@ Expected benefit:
 - Better throughput under changing rate limits.
 - Fewer hard failures at high concurrency settings.
 
-#  failed job handling
+### Cost estimate UI
 
-if some job failed show a shrug emoji not thumbs up
-add a button to restart all failed jobs
+Possible implementation:
 
-#  cost estimate
-show cost - do we get it from openai?
-what about disconnects we still get charged possibly?
-maybe stress it is an estimate
-a button to reset cost counter
-show cost per page
+- Track per-page estimated token/audio usage and aggregate total.
+- Clearly label values as estimates.
+- Provide reset action for the local cost counter.
+- Show per-page estimate in page table and overall estimate in header.
