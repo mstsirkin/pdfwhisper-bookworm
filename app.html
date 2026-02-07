@@ -39,7 +39,7 @@ const APP = {
     ttsModel: "gpt-4o-mini-tts",
     voice: "coral",
     ttsInstructions: "", // optional
-    scale: 1.5,
+    scale: 2,
     maxParallel: 30,
     settingsExpanded: false,
   },
@@ -950,7 +950,7 @@ function buildUI() {
       APP.state.ttsModel = "gpt-4o-mini-tts";
       APP.state.voice = "coral";
       APP.state.ttsInstructions = "";
-      APP.state.scale = 1.5;
+      APP.state.scale = 2;
       APP.state.maxParallel = 30;
 
       promptArea.value = APP.state.prompt;
