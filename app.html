@@ -9,15 +9,7 @@
 
 <div id="app"></div>
 
-<!-- Libraries (UMD) so file:// works better -->
-<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
-<script>
-  if (window.pdfjsLib && window.pdfjsLib.GlobalWorkerOptions) {
-    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-      "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
-  }
-</script>
-<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<!-- Libraries are loaded lazily in JS with CDN fallback. -->
 
 <script>
 /*
@@ -97,22 +89,6 @@ function downloadBlob(blob, filename) {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 
-// --------- External libs sync check (for file:// + CDN UMD scripts) ---------
-function ensureLibsSync() {
-  // Prefer globals provided by <script> tags in app.html
-  if (window.pdfjsLib) pdfjsLib = window.pdfjsLib;
-  if (window.JSZip) JSZip = window.JSZip;
-
-  if (!pdfjsLib) throw new Error("pdfjsLib not loaded. Check PDF.js <script> tag.");
-  if (!JSZip) throw new Error("JSZip not loaded. Check JSZip <script> tag.");
-
-  // Worker (PDF.js)
-  if (pdfjsLib.GlobalWorkerOptions && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
-    pdfjsLib.GlobalWorkerOptions.workerSrc =
-      "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
-  }
-}
-
 // --------- Persistence ---------
 const LS_KEY = "pdf2aac_app_v1";
 const TEMP_SUPPORT_KEY_PREFIX = "temp_supported::";
@@ -169,6 +145,18 @@ let pdfjsLib = null;
 let JSZip = null;
 let forcePdfNoWorker = false;
 const scriptLoadCache = Object.create(null);
+const PDFJS_CDN_URLS = [
+  "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js",
+  "https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js"
+];
+const PDFJS_WORKER_URLS = [
+  "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js",
+  "https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js"
+];
+const JSZIP_CDN_URLS = [
+  "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js",
+  "https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"
+];
 
 function loadScriptOnce(url) {
   if (scriptLoadCache[url]) return scriptLoadCache[url];
@@ -183,17 +171,30 @@ function loadScriptOnce(url) {
   return scriptLoadCache[url];
 }
 
+async function loadScriptAny(urls) {
+  let lastErr = null;
+  for (const url of urls) {
+    try {
+      await loadScriptOnce(url);
+      return url;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error("Failed to load script from all configured CDNs.");
+}
+
 async function ensureLibs() {
   if (!pdfjsLib && window.pdfjsLib) pdfjsLib = window.pdfjsLib;
   if (!JSZip && window.JSZip) JSZip = window.JSZip;
 
-  // Fallback: lazy-load UMD bundles if initial tags failed.
+  // Lazy-load UMD bundles with fallback CDNs.
   if (!pdfjsLib) {
-    await loadScriptOnce("https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js");
+    await loadScriptAny(PDFJS_CDN_URLS);
     if (window.pdfjsLib) pdfjsLib = window.pdfjsLib;
   }
   if (!JSZip) {
-    await loadScriptOnce("https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js");
+    await loadScriptAny(JSZIP_CDN_URLS);
     if (window.JSZip) JSZip = window.JSZip;
   }
 
@@ -201,8 +202,7 @@ async function ensureLibs() {
   if (!JSZip) throw new Error("JSZip not loaded.");
 
   if (pdfjsLib.GlobalWorkerOptions && !forcePdfNoWorker) {
-    pdfjsLib.GlobalWorkerOptions.workerSrc =
-      "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+    pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URLS[0];
   }
 }
 
@@ -417,7 +417,7 @@ async function renderPageToPngBlob(pdfDoc, pageNumber, scale) {
 
   const pngBlob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
   // Cleanup
-  page.cleanup?.();
+  if (page && typeof page.cleanup === "function") page.cleanup();
   canvas.width = 0; canvas.height = 0;
 
   if (!pngBlob) throw new Error("Failed to create PNG blob.");
@@ -817,7 +817,9 @@ async function runPipeline(ui) {
 
 function cancelPipeline(ui) {
   APP.state.cancelled = true;
-  APP.state.scheduler?.cancel();
+  if (APP.state.scheduler && typeof APP.state.scheduler.cancel === "function") {
+    APP.state.scheduler.cancel();
+  }
   for (const p of APP.state.pages) {
     p._restartPending = false;
     for (const ac of p.aborts) {
@@ -1186,7 +1188,7 @@ function buildUI() {
     title,
     status,
     el("div", {},
-      el("div", { style: { ...labelStyle(), display: "flex", gap: "10px", alignItems: "center", marginBottom: "6px" } },
+      el("div", { style: Object.assign({}, labelStyle(), { display: "flex", gap: "10px", alignItems: "center", marginBottom: "6px" }) },
         el("div", { style: { minWidth: "24px", margin: 0 } }, "1)"),
         el("div", {}, "OpenAI API key")
       ),
@@ -1194,7 +1196,7 @@ function buildUI() {
       keyLinks
     ),
     el("div", {},
-      el("div", { style: { ...labelStyle(), display: "flex", gap: "10px", alignItems: "center", marginBottom: "6px" } },
+      el("div", { style: Object.assign({}, labelStyle(), { display: "flex", gap: "10px", alignItems: "center", marginBottom: "6px" }) },
         el("div", { style: { minWidth: "24px", margin: 0 } }, "2)"),
         el("div", {}, "Upload PDF")
       ),
@@ -1202,17 +1204,17 @@ function buildUI() {
     ),
     el("div", {},
       el("div", { style: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" } },
-        el("div", { style: { ...labelStyle(), margin: 0, minWidth: "24px" } }, "3)"),
+        el("div", { style: Object.assign({}, labelStyle(), { margin: 0, minWidth: "24px" }) }, "3)"),
         settingsToggleBtn
       ),
       settingsPanel
     ),
     el("div", { style: { display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" } },
-      el("div", { style: { ...labelStyle(), margin: 0, minWidth: "24px" } }, "4)"),
+      el("div", { style: Object.assign({}, labelStyle(), { margin: 0, minWidth: "24px" }) }, "4)"),
       startBtn, cancelBtn
     ),
     el("div", { style: { display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" } },
-      el("div", { style: { ...labelStyle(), margin: 0, minWidth: "24px" } }, "5)"),
+      el("div", { style: Object.assign({}, labelStyle(), { margin: 0, minWidth: "24px" }) }, "5)"),
       downloadStateEmoji,
       zipTxtBtn, fullTxtBtn, zipAacBtn, fullAacBtn
     ),
@@ -1240,14 +1242,13 @@ function buildUI() {
 }
 
 function btnStyle(overrides = {}) {
-  return {
+  return Object.assign({
     padding: "10px 12px",
     borderRadius: "10px",
     border: "1px solid #ccc",
     background: "#fff",
-    cursor: "pointer",
-    ...overrides
-  };
+    cursor: "pointer"
+  }, overrides || {});
 }
 function miniBtnStyle() {
   return {
