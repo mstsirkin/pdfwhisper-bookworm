@@ -1376,7 +1376,7 @@ function buildUI() {
     if (APP.state.settingsExpanded) settingsPanel.style.maxHeight = `${settingsPanel.scrollHeight}px`;
   });
 
-  const startBtn = el("button", { style: btnStyle(), onclick: async () => {
+  const startBtn = el("button", { style: btnStyle({ background:"#eee" }), onclick: async () => {
     if (APP.state.running) return;
     await runPipeline(ui);
   }}, "Start processing");
