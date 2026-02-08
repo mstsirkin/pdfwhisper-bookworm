@@ -31,6 +31,8 @@ const APP = {
     pageCount: 0,
     pages: [], // {i, stage, txt, aacBytes(Uint8Array), err, aborts:[], _running, _queued, _restartPending}
     scheduler: null,
+    pageRangeFrom: "",
+    pageRangeTo: "",
     // persisted
     apiKey: "",
     prompt: "",
@@ -496,6 +498,34 @@ function makeHttpError(prefix, status, bodyText) {
   return err;
 }
 
+function getPageState(pageNum) {
+  return APP.state.pages.find((p) => p && p.i === pageNum) || null;
+}
+
+function resolvePageRange(totalPages) {
+  const fromRaw = String(APP.state.pageRangeFrom || "").trim();
+  const toRaw = String(APP.state.pageRangeTo || "").trim();
+
+  let from = 1;
+  let to = totalPages;
+
+  if (fromRaw) {
+    const n = Number(fromRaw);
+    if (!Number.isInteger(n) || n < 1) throw new Error("From page must be a positive integer.");
+    from = n;
+  }
+  if (toRaw) {
+    const n = Number(toRaw);
+    if (!Number.isInteger(n) || n < 1) throw new Error("To page must be a positive integer.");
+    to = n;
+  }
+
+  if (from > totalPages) throw new Error(`From page must be <= ${totalPages}.`);
+  if (to > totalPages) throw new Error(`To page must be <= ${totalPages}.`);
+  if (from > to) throw new Error("From page must be less than or equal to To page.");
+  return { from, to };
+}
+
 // --------- Blob helpers ---------
 function blobToDataURL(blob) {
   return new Promise((resolve, reject) => {
@@ -607,7 +637,7 @@ function makeAbort() {
 }
 
 async function processPage(pdfDoc, i, ui) {
-  const p = APP.state.pages[i - 1];
+  const p = getPageState(i);
   if (!p) return;
 
   p._running = true;
@@ -737,7 +767,7 @@ function createPageScheduler({ pdfDoc, ui, maxParallel }) {
   };
 
   const startPageNow = (pageNum) => {
-    const p = APP.state.pages[pageNum - 1];
+    const p = getPageState(pageNum);
     if (!p || p._running) return false;
     const idx = queue.indexOf(pageNum);
     if (idx !== -1) queue.splice(idx, 1);
@@ -771,7 +801,7 @@ function createPageScheduler({ pdfDoc, ui, maxParallel }) {
 
   const enqueue = (pageNum, front = false) => {
     if (APP.state.cancelled) return false;
-    const p = APP.state.pages[pageNum - 1];
+    const p = getPageState(pageNum);
     if (!p || p._running || p._queued) return false;
     p._queued = true;
     if (front) queue.unshift(pageNum);
@@ -806,7 +836,7 @@ function resetPageForRestart(p, ui) {
 }
 
 async function restartPage(ui, pageNum) {
-  const p = APP.state.pages[pageNum - 1];
+  const p = getPageState(pageNum);
   if (!p) return;
   if (!APP.state.apiKey) {
     ui.setStatus("Please enter an OpenAI API key.");
@@ -993,11 +1023,12 @@ async function runPipeline(ui) {
     const pdfDoc = await loadPdfDocument(APP.state.pdfBytes);
     APP.state.pdfDoc = pdfDoc;
     APP.state.pageCount = pdfDoc.numPages;
+    const pageRange = resolvePageRange(APP.state.pageCount);
 
     // Create slots
     APP.state.pages = [];
     ui.clearPages();
-    for (let i = 1; i <= APP.state.pageCount; i++) {
+    for (let i = pageRange.from; i <= pageRange.to; i++) {
       const p = {
         i,
         stage: "queued",
@@ -1018,17 +1049,18 @@ async function runPipeline(ui) {
     const requestedParallel = Number.isFinite(parsedParallel)
       ? Math.max(0, Math.floor(parsedParallel))
       : 0;
-    const workerCount = Math.min(requestedParallel, APP.state.pageCount);
+    const selectedCount = APP.state.pages.length;
+    const workerCount = Math.min(requestedParallel, selectedCount);
     if (workerCount === 0) {
-      ui.setStatus(`Queued ${APP.state.pageCount} pages. Manual mode: use Restart Page to start jobs.`);
+      ui.setStatus(`Queued pages ${pageRange.from}-${pageRange.to} (${selectedCount} total). Manual mode: use Restart Page to start jobs.`);
     } else {
-      ui.setStatus(`Processing ${APP.state.pageCount} pages (max parallel: ${workerCount})…`);
+      ui.setStatus(`Processing pages ${pageRange.from}-${pageRange.to} (${selectedCount} total, max parallel: ${workerCount})…`);
     }
 
     const scheduler = createPageScheduler({ pdfDoc, ui, maxParallel: workerCount });
     APP.state.scheduler = scheduler;
-    for (let i = 1; i <= APP.state.pageCount; i++) {
-      scheduler.enqueue(i);
+    for (const p of APP.state.pages) {
+      scheduler.enqueue(p.i);
     }
     await scheduler.done;
 
@@ -1115,6 +1147,22 @@ function buildUI() {
       APP.state.pdfFile = f || null;
       ui.setStatus(f ? `Selected PDF: ${f.name}` : "No PDF selected.");
     }
+  });
+
+  const pageFromInput = el("input", {
+    type: "number",
+    min: "1",
+    placeholder: "From page",
+    style: { width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #ccc" },
+    oninput: (e) => { APP.state.pageRangeFrom = String(e.target.value || ""); }
+  });
+
+  const pageToInput = el("input", {
+    type: "number",
+    min: "1",
+    placeholder: "To page",
+    style: { width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #ccc" },
+    oninput: (e) => { APP.state.pageRangeTo = String(e.target.value || ""); }
   });
 
   const visionModelInput = el("input", {
@@ -1349,6 +1397,8 @@ function buildUI() {
       promptArea.disabled = running;
       resetAllSettingsBtn.disabled = running;
       pdfInput.disabled = running;
+      pageFromInput.disabled = running;
+      pageToInput.disabled = running;
       visionModelInput.disabled = running;
       ttsModelInput.disabled = running;
       voiceInput.disabled = running;
@@ -1472,7 +1522,11 @@ function buildUI() {
         el("div", { style: { minWidth: "24px", margin: 0 } }, "2)"),
         el("div", {}, "Upload PDF")
       ),
-      pdfInput
+      pdfInput,
+      el("div", { style: { marginTop: "8px", display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: "10px" } },
+        el("div", {}, el("div", { style: labelStyle() }, "From page (optional)"), pageFromInput),
+        el("div", {}, el("div", { style: labelStyle() }, "To page (optional)"), pageToInput)
+      )
     ),
     el("div", {},
       el("div", { style: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" } },
@@ -1508,6 +1562,8 @@ function buildUI() {
   parallelInput.value = String(APP.state.maxParallel);
   staggerInput.value = String(APP.state.requestStaggerSec);
   retry495Input.checked = !!APP.state.retryOnRateLimit495;
+  pageFromInput.value = "";
+  pageToInput.value = "";
 
   updateSettingsPanel({ animate: false });
   ui.setRunning(false);
