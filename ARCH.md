@@ -103,7 +103,9 @@ ZIP → Blob
 
 PNG rendering  
 AAC output  
-page_001 naming  
+Per-page naming default: `page_###`  
+Optional non-persistent `Name` prefix: `Name_page_###`  
+Full output naming: `Name.ext` when `Name` is set, else `full.ext`  
 
 ## 12. Constraints
 
@@ -119,6 +121,13 @@ AAC bitrate uncontrolled.
   - `3)` Execution settings toggle
   - `4)` Start processing / Cancel / Restart only failed jobs
   - `5)` Download actions
+- Row `2)` includes compact inline controls:
+  - file picker
+  - **Name** (non-persistent)
+  - **From page** (optional, non-persistent)
+  - **To page** (optional, non-persistent)
+- On file selection, `Name` auto-fills from filename without `.pdf`.
+- If `From/To` are blank, processing defaults to first and last page.
 - API key field (persisted locally) with helper links:
   - Creating keys
   - Add to balance
@@ -161,6 +170,17 @@ Global:
 
 Concatenated AAC = byte-append ADTS pages.
 
+Download naming behavior:
+- Per-page TXT/AAC:
+  - `Name_page_###.txt/.aac` when `Name` is set
+  - `page_###.txt/.aac` when `Name` is empty
+- ZIP downloads:
+  - `Name_text_pages.zip` / `Name_aac_pages.zip` when `Name` is set
+  - `text_pages.zip` / `aac_pages.zip` when `Name` is empty
+- Full outputs:
+  - `Name.txt` / `Name.aac` when `Name` is set
+  - `full.txt` / `full.aac` when `Name` is empty
+
 Cancel:
 - Stops new pages
 - Aborts in-flight
@@ -170,6 +190,7 @@ Persistence:
 - OpenAI key (secure storage)
 - Prompt
 - Voice/model/settings (including scale, max parallel, and request stagger seconds)
+- `Name` / `From page` / `To page` are intentionally non-persistent.
 
 UX summary:
 - Immediate per-page TXT
@@ -187,7 +208,7 @@ Vision model:
 
 Default PNG → text prompt:
 
-look at it, remove repeating page headers and footers (but leave title in place), and note if there are footnotes and where they are referenced. then, produce the text of the page.
+look at this page from a paper, taking into account that papers can use varying indent and fonts for emphasis, and remove repeating page headers and footers (but leave title in place), and note if there are footnotes and where they are referenced. IF TEXT IS HARD TO READ THINK HARD TO UNDERSTAND AND EXTRACT IT. make sure not to remove paper text! if you are in doubt whether something is a header or main text, it is better to leave it in place.  then, produce the text of the page.
 if there is a footnote, find where the footnote belongs (the place where the footnote is referenced by number!) and insert inline like this:
 <insert space here>FOOTNOTE: [ TEXT ] END OF FOOTNOTE .
 To be clear: for example, if text has reference [1] and foot note stating 1. SOMETEXT at bottom of page, replace [1] with
@@ -262,8 +283,9 @@ Behavior:
   - Enable a button: “Download full concatenated TXT”
 - The combined file is created by concatenating all `page_###.txt` contents in page order,
   separated by two newlines between pages.
-- Output filename example:
-  - `full.txt`
+- Output filename:
+  - if `Name` is set: `Name.txt`
+  - if `Name` is empty: `full.txt`
 
 This is independent of audio readiness and appears together with:
 
