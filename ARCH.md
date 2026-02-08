@@ -555,42 +555,48 @@ Possible implementation:
 - Show per-page estimate in page table and overall estimate in header.
 
 
-## 23. TODO: Apple Books-friendly M4B output (on-device)
+## 23. M4B output (on-device)
 
 Goal:
 
-- Add optional M4B export with chapter navigation for Apple Books.
+- Provide optional M4B export with chapter navigation.
 - Keep existing TXT/AAC/ZIP flows unchanged.
 - Keep processing fully on-device.
 
-Current constraints discovered:
+Implemented:
 
-- Mediabunny does not currently expose direct chapter authoring APIs.
-- Mediabunny does not currently expose a public way to inject `tref/chap` references.
-- A fork/patch is required for complete Apple Books chapter wiring.
+- Added `M4B` download action from completed per-page AAC results.
+- Built chapter timing from page AAC durations (no OpenAI timing dependency).
+- Concatenated per-page AAC packets into one output audio track.
+- Added chapter subtitle track and linked it via `tref/chap`.
+- Marked chapter track non-default (`disposition.default = false`).
+- Added output naming: `Name.m4b` when `Name` is set, `full.m4b` when `Name` is empty.
 
-Decisions:
+Container/chapter writing approach:
 
-- Keep one high-level app path only (no public low-level "power user" API).
-- Keep any low-level MP4 box work internal to the fork.
-- Keep app delivery as a single HTML file; vendored patched Mediabunny is bundled into `app.html`.
-- Derive chapter timing from generated per-page AAC data (no OpenAI timing dependency).
+- Forked Mediabunny in `vendor/mediabunny`.
+- Added chapter track reference API support (`tref/chap`).
+- Added optional Nero chapter list output (`udta/chpl`) via `new Mp4OutputFormat({ chapterFormat: 'tref+nero-chpl' })`.
+- App M4B export uses `chapterFormat: "tref+nero-chpl"` for broader player compatibility.
 
-Implementation TODO:
+Known player compatibility:
 
-- [ ] Add an on-demand "Download M4B (chapters)" action.
-- [ ] Parse each per-page AAC duration via Mediabunny input track timing.
-- [ ] Build cumulative chapter start times from page durations.
-- [ ] Concatenate page AAC into one audiobook audio track.
-- [ ] Create and mux a chapter text track payload (format to be finalized during implementation).
-- [ ] Add `tref/chap` track reference from main audio track to chapter track.
-- [ ] Mark chapter track as non-default/hidden for playback.
-- [ ] Write output filename as:
-  - `Name.m4b` when `Name` is set
-  - `full.m4b` when `Name` is empty
-- [ ] Validate behavior in Apple Books on iPhone with real multi-page samples.
+- Apple Books remains the primary target.
+- VLC can require Nero-style `chpl`; this is now emitted when using `tref+nero-chpl`.
+- Cozy Player currently does not accept the produced M4B/M4A files (observed locally).
 
-Non-goals for this phase:
+Linux playback notes:
 
-- Do not introduce server-side muxing.
-- Do not expose raw MP4 internals in app UI/settings.
+- `mpv` chapter navigation: `PgUp` / `PgDn`, or chapter picker `g` then `c`.
+- On this mpv build, start-at-chapter CLI syntax is `mpv --start='#3' file.m4b`.
+- (quote or escape `#`, otherwise shell treats it as comment).
+
+Remaining validation:
+
+- Re-test Apple Books chapter UI/behavior on iPhone with multi-page real books.
+- Re-test chapter title display across VLC/mpv after library updates.
+
+Non-goals:
+
+- No server-side muxing.
+- No exposing raw MP4 box internals in app UI/settings.
