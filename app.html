@@ -1141,7 +1141,7 @@ function buildUI() {
   const pdfInput = el("input", {
     type: "file",
     accept: "application/pdf",
-    style: { width: "100%" },
+    style: { width: "auto", maxWidth: "100%" },
     onchange: (e) => {
       const f = e.target.files && e.target.files[0];
       APP.state.pdfFile = f || null;
@@ -1152,16 +1152,16 @@ function buildUI() {
   const pageFromInput = el("input", {
     type: "number",
     min: "1",
-    placeholder: "From page",
-    style: { width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #ccc" },
+    placeholder: "#",
+    style: { width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #ccc", textAlign: "left" },
     oninput: (e) => { APP.state.pageRangeFrom = String(e.target.value || ""); }
   });
 
   const pageToInput = el("input", {
     type: "number",
     min: "1",
-    placeholder: "To page",
-    style: { width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #ccc" },
+    placeholder: "#",
+    style: { width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #ccc", textAlign: "left" },
     oninput: (e) => { APP.state.pageRangeTo = String(e.target.value || ""); }
   });
 
@@ -1522,10 +1522,14 @@ function buildUI() {
         el("div", { style: { minWidth: "24px", margin: 0 } }, "2)"),
         el("div", {}, "Upload PDF")
       ),
-      pdfInput,
-      el("div", { style: { marginTop: "8px", display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: "10px" } },
-        el("div", {}, el("div", { style: labelStyle() }, "From page (optional)"), pageFromInput),
-        el("div", {}, el("div", { style: labelStyle() }, "To page (optional)"), pageToInput)
+      el("div", { style: { marginTop: "4px", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" } },
+        el("div", { style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" } },
+          pdfInput
+        ),
+        el("div", { style: { fontSize: "12px", color: "#444", whiteSpace: "nowrap" } }, "From page"),
+        el("div", { style: { width: "72px" } }, pageFromInput),
+        el("div", { style: { fontSize: "12px", color: "#444", whiteSpace: "nowrap" } }, "To page"),
+        el("div", { style: { width: "72px" } }, pageToInput)
       )
     ),
     el("div", {},
