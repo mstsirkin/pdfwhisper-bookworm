@@ -31,6 +31,7 @@ const APP = {
     pageCount: 0,
     pages: [], // {i, stage, txt, aacBytes(Uint8Array), err, aborts:[], _running, _queued, _restartPending}
     scheduler: null,
+    downloadName: "",
     pageRangeFrom: "",
     pageRangeTo: "",
     // persisted
@@ -498,6 +499,32 @@ function makeHttpError(prefix, status, bodyText) {
   return err;
 }
 
+function stripPdfExtension(fileName) {
+  return String(fileName || "").replace(/\.pdf$/i, "");
+}
+
+function getDownloadNameBase() {
+  return String(APP.state.downloadName || "").trim();
+}
+
+function getDownloadNamePrefix() {
+  const base = getDownloadNameBase();
+  return base ? `${base}_` : "";
+}
+
+function pageOutputName(pageNum, ext) {
+  return `${getDownloadNamePrefix()}page_${String(pageNum).padStart(3, "0")}.${ext}`;
+}
+
+function fullOutputName(ext) {
+  const base = getDownloadNameBase();
+  return base ? `${base}.${ext}` : `full.${ext}`;
+}
+
+function prefixedOutputName(filename) {
+  return `${getDownloadNamePrefix()}${filename}`;
+}
+
 function getPageState(pageNum) {
   return APP.state.pages.find((p) => p && p.i === pageNum) || null;
 }
@@ -563,12 +590,12 @@ async function zipAllTxt() {
   const zip = new JSZip();
   for (const p of APP.state.pages) {
     if (typeof p.txt === "string") {
-      zip.file(`text/page_${String(p.i).padStart(3, "0")}.txt`, p.txt);
+      zip.file(`text/${pageOutputName(p.i, "txt")}`, p.txt);
     }
   }
   zip.file("manifest.json", JSON.stringify(makeManifest(), null, 2));
   const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 }});
-  downloadBlob(blob, "text_pages.zip");
+  downloadBlob(blob, prefixedOutputName("text_pages.zip"));
 }
 
 async function zipAllAac() {
@@ -576,12 +603,12 @@ async function zipAllAac() {
   const zip = new JSZip();
   for (const p of APP.state.pages) {
     if (p.aacBytes instanceof Uint8Array) {
-      zip.file(`audio/page_${String(p.i).padStart(3, "0")}.aac`, p.aacBytes);
+      zip.file(`audio/${pageOutputName(p.i, "aac")}`, p.aacBytes);
     }
   }
   zip.file("manifest.json", JSON.stringify(makeManifest(), null, 2));
   const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 }});
-  downloadBlob(blob, "aac_pages.zip");
+  downloadBlob(blob, prefixedOutputName("aac_pages.zip"));
 }
 
 function concatAllTxt() {
@@ -593,7 +620,7 @@ function concatAllTxt() {
   if (!pages.length) throw new Error("No text pages available.");
 
   const joined = pages.join("\n\n");
-  downloadBlob(new Blob([joined], { type: "text/plain;charset=utf-8" }), "full.txt");
+  downloadBlob(new Blob([joined], { type: "text/plain;charset=utf-8" }), fullOutputName("txt"));
 }
 
 function concatAllAac() {
@@ -613,7 +640,7 @@ function concatAllAac() {
     off += c.byteLength;
   }
   const blob = new Blob([out], { type: "audio/aac" });
-  downloadBlob(blob, "full.aac");
+  downloadBlob(blob, fullOutputName("aac"));
 }
 
 function makeManifest() {
@@ -621,8 +648,8 @@ function makeManifest() {
     source_pdf: APP.state.pdfFile ? APP.state.pdfFile.name : "",
     pages: APP.state.pages.map(p => ({
       page: p.i,
-      text: p.txt ? `text/page_${String(p.i).padStart(3,"0")}.txt` : null,
-      audio: p.aacBytes ? `audio/page_${String(p.i).padStart(3,"0")}.aac` : null,
+      text: p.txt ? `text/${pageOutputName(p.i, "txt")}` : null,
+      audio: p.aacBytes ? `audio/${pageOutputName(p.i, "aac")}` : null,
       status: p.stage,
       error: p.err || null
     })),
@@ -1145,8 +1172,18 @@ function buildUI() {
     onchange: (e) => {
       const f = e.target.files && e.target.files[0];
       APP.state.pdfFile = f || null;
+      const autoName = f ? stripPdfExtension(f.name) : "";
+      APP.state.downloadName = autoName;
+      nameInput.value = autoName;
       ui.setStatus(f ? `Selected PDF: ${f.name}` : "No PDF selected.");
     }
+  });
+
+  const nameInput = el("input", {
+    type: "text",
+    placeholder: "Name",
+    style: { width: "100%", boxSizing: "border-box", padding: "10px", borderRadius: "8px", border: "1px solid #ccc" },
+    oninput: (e) => { APP.state.downloadName = String(e.target.value || ""); }
   });
 
   const pageFromInput = el("input", {
@@ -1399,6 +1436,7 @@ function buildUI() {
       promptArea.disabled = running;
       resetAllSettingsBtn.disabled = running;
       pdfInput.disabled = running;
+      nameInput.disabled = running;
       pageFromInput.disabled = running;
       pageToInput.disabled = running;
       visionModelInput.disabled = running;
@@ -1416,12 +1454,12 @@ function buildUI() {
 
       txtBtn.addEventListener("click", () => {
         if (typeof p.txt === "string") {
-          downloadBlob(new Blob([p.txt], { type: "text/plain;charset=utf-8" }), `page_${String(p.i).padStart(3,"0")}.txt`);
+          downloadBlob(new Blob([p.txt], { type: "text/plain;charset=utf-8" }), pageOutputName(p.i, "txt"));
         }
       });
       aacBtn.addEventListener("click", () => {
         if (p.aacBytes instanceof Uint8Array) {
-          downloadBlob(new Blob([p.aacBytes], { type: "audio/aac" }), `page_${String(p.i).padStart(3,"0")}.aac`);
+          downloadBlob(new Blob([p.aacBytes], { type: "audio/aac" }), pageOutputName(p.i, "aac"));
         }
       });
       restartBtn.addEventListener("click", async () => {
@@ -1528,6 +1566,8 @@ function buildUI() {
         el("div", { style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" } },
           pdfInput
         ),
+        el("div", { style: { fontSize: "12px", color: "#444", whiteSpace: "nowrap" } }, "Name"),
+        el("div", { style: { width: "180px" } }, nameInput),
         el("div", { style: { fontSize: "12px", color: "#444", whiteSpace: "nowrap" } }, "From page"),
         el("div", { style: { width: "72px" } }, pageFromInput),
         el("div", { style: { fontSize: "12px", color: "#444", whiteSpace: "nowrap" } }, "To page"),
@@ -1568,6 +1608,7 @@ function buildUI() {
   parallelInput.value = String(APP.state.maxParallel);
   staggerInput.value = String(APP.state.requestStaggerSec);
   retry495Input.checked = !!APP.state.retryOnRateLimit495;
+  nameInput.value = APP.state.downloadName;
   pageFromInput.value = "";
   pageToInput.value = "";
 
