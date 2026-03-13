@@ -5,16 +5,37 @@ VENDOR_DIR := vendor/mediabunny
 BUNDLE := $(VENDOR_DIR)/dist/bundles/mediabunny.min.cjs
 NODE_MODULES := $(VENDOR_DIR)/node_modules
 
-.PHONY: help bundle update
+.PHONY: help init-submodules ensure-submodule bundle update
 
 help:
 	@echo "Targets:"
-	@echo "  help   Show this help (default)"
-	@echo "  bundle Build Mediabunny bundle in vendor/mediabunny"
-	@echo "  update Rebuild bundled Mediabunny and inline it into app.html"
+	@echo "  help             Show this help (default)"
+	@echo "  init-submodules  Initialize git submodules"
+	@echo "  bundle           Build Mediabunny bundle in vendor/mediabunny"
+	@echo "  update           Rebuild bundled Mediabunny and inline it into app.html"
 
-bundle:
-	@test -f "$(VENDOR_DIR)/package.json" || { echo "Missing $(VENDOR_DIR)/package.json" >&2; exit 1; }
+init-submodules:
+	@echo "Initializing git submodules..."
+	@git submodule update --init --recursive
+
+ensure-submodule:
+	@test -f .gitmodules || { echo "Missing .gitmodules; vendor/mediabunny is expected to be a submodule." >&2; exit 1; }
+	@status="$$(git submodule status -- "$(VENDOR_DIR)" 2>/dev/null || true)"; \
+	if [ -z "$$status" ]; then \
+		echo "Missing submodule registration for $(VENDOR_DIR)." >&2; \
+		echo "Run: make init-submodules" >&2; \
+		exit 1; \
+	fi; \
+	case "$${status%% *}" in \
+		-*) \
+			echo "Submodule $(VENDOR_DIR) is not initialized." >&2; \
+			echo "Run: make init-submodules" >&2; \
+			exit 1; \
+			;; \
+	esac
+
+bundle: ensure-submodule
+	@test -f "$(VENDOR_DIR)/package.json" || { echo "Missing $(VENDOR_DIR)/package.json. Run: make init-submodules" >&2; exit 1; }
 	@if [ ! -d "$(NODE_MODULES)" ]; then \
 		echo "Installing vendor dependencies..."; \
 		cd "$(VENDOR_DIR)" && npm install; \

@@ -1,0 +1,3 @@
+[submodule "vendor/mediabunny"]
+	path = vendor/mediabunny
+	url = https://github.com/mstsirkin/mediabunny.git
