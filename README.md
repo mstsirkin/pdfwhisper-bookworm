@@ -4,16 +4,24 @@ A serverless frontend for turning PDFs and EPUBs into audiobooks.
 
 Runs entirely in the browser from a pair of standalone HTML files.
 
-To use: open `pdf.html` or `epub.html` respectively in a browser. Rest should
-be self-explanatory.
+Use online:
+- [PDF app](https://mstsirkin.github.io/bookworm-whisper/pdf.html)
+- [EPUB app](https://mstsirkin.github.io/bookworm-whisper/epub.html)
+
+Enable GitHub Pages in the repository settings with `GitHub Actions` as the source
+to publish those URLs.
+
+Source files in this repo:
+- [pdf.html](pdf.html)
+- [epub.html](epub.html)
 
 I know, the UI is atrocious. If anyone wants to work on that, send a pull request.
 
 ## What It Does
 
 Input:
-- a local PDF in `pdf.html`
-- a local EPUB in `epub.html`
+- a local PDF in [pdf.html](pdf.html)
+- a local EPUB in [epub.html](epub.html)
 
 Per selected page in the PDF app:
 - render the page to a PNG with PDF.js
@@ -109,4 +117,4 @@ At runtime the browser app lazily loads some libraries from CDNs:
 
 ## Typical Local Use
 
-Just open `pdf.html` or `epub.html` directly in a modern browser.
+Open [pdf.html](pdf.html) or [epub.html](epub.html) directly in a modern browser.
