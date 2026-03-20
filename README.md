@@ -115,3 +115,21 @@ At runtime the browser app lazily loads some libraries from CDNs:
 ## Typical Local Use
 
 Open [pdf.html](pdf.html) or [epub.html](epub.html) directly in a modern browser.
+
+## Questions
+Here are some questions you might not have:
+
+## So why are you going through PNG and Vision?
+Because I have scanned PDFs and EPUBs that do not include text.
+
+## How is this serverless?
+It's a serverless frontend in that I do not maintain any backends for this.
+
+## Why did you vendor mediabunny?
+I submitted a PR but they are not interested in M4B support at this time.
+
+## Why M4B specifically?
+My friend has an iPhone so I wanted to support Apple Books.
+
+## Is this 100% vibe-coded?
+Mostly. I'm not a frontend guy.
